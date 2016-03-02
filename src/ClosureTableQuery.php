@@ -268,6 +268,7 @@ class ClosureTableQuery extends Behavior
     {
         $query = $this->owner;
         $modelClass = $query->modelClass;
+        /** @var $db \yii\db\Connection */
         $db = $modelClass::getDb();
 
         $targetId = ($target instanceof ActiveRecord)
@@ -288,24 +289,28 @@ class ClosureTableQuery extends Behavior
 
         $transaction = $db->beginTransaction();
         try {
-            $sql = "DELETE ct1 FROM ".$tableName." ct1 "
-                . " INNER JOIN ".$tableName." ct2 ON ct1.".$childAttribute." = ct2.".$childAttribute
-                . " LEFT JOIN ".$tableName." ct3 ON ct3.".$parentAttribute." = ct2.".$parentAttribute
-                . " AND ct3.".$childAttribute." = ct1.".$parentAttribute
-                ." WHERE ct2.".$parentAttribute." = :nodeId AND ct3.".$parentAttribute." IS NULL";
+            if (!$this->isRoot($nodeId)) { // if moved root, then do not delete anything
+                $sql = "DELETE ct1 FROM " . $tableName . " ct1 "
+                    . " INNER JOIN " . $tableName . " ct2 ON ct1." . $childAttribute . " = ct2." . $childAttribute
+                    . " LEFT JOIN " . $tableName . " ct3 ON ct3." . $parentAttribute . " = ct2." . $parentAttribute
+                    . " AND ct3." . $childAttribute . " = ct1." . $parentAttribute
+                    . " WHERE ct2." . $parentAttribute . " = :nodeId AND ct3." . $parentAttribute . " IS NULL";
 
-            if(!$db->createCommand($sql)->bindValue(':nodeId', $nodeId)->execute()) {
-                throw new \Exception('Node had no records in closure table', 200);
+                if (!$db->createCommand($sql)->bindValue(':nodeId', $nodeId)->execute()) {
+                    throw new \Exception('Node had no records in closure table', 200);
+                }
             }
 
-            $sql = "INSERT INTO " . $tableName . " (" . $parentAttribute . "," . $childAttribute . "," . $depthAttribute . ")"
-                . " SELECT ct1." . $parentAttribute . ", ct2." . $childAttribute
-                . " , ct1." . $depthAttribute . " + ct2." . $depthAttribute. "+1 "
-                . " FROM " . $tableName . " ct1 INNER JOIN " . $tableName . " ct2 "
-                . " WHERE ct2." . $parentAttribute . " = :nodeId AND ct1." . $childAttribute . " = :targetId";
+            if ($targetId) { // if move node to root, then do not insert anything
+                $sql = "INSERT INTO " . $tableName . " (" . $parentAttribute . "," . $childAttribute . "," . $depthAttribute . ")"
+                    . " SELECT ct1." . $parentAttribute . ", ct2." . $childAttribute
+                    . " , ct1." . $depthAttribute . " + ct2." . $depthAttribute . "+1 "
+                    . " FROM " . $tableName . " ct1 INNER JOIN " . $tableName . " ct2 "
+                    . " WHERE ct2." . $parentAttribute . " = :nodeId AND ct1." . $childAttribute . " = :targetId";
 
-            if(!$db->createCommand($sql)->bindValues([':nodeId'=>$nodeId, ':targetId'=>$targetId])->execute()) {
-                throw new \Exception("Target node does not exist", 201);
+                if (!$db->createCommand($sql)->bindValues([':nodeId' => $nodeId, ':targetId' => $targetId])->execute()) {
+                    throw new \Exception("Target node does not exist", 201);
+                }
             }
 
             $transaction->commit();
@@ -314,6 +319,26 @@ class ClosureTableQuery extends Behavior
             $transaction->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * Checks whether the node as root.
+     * @param int $primaryKey
+     * @return bool
+     * @throws yii\db\Exception
+     */
+    public function isRoot($primaryKey) {
+        $modelClass = $this->owner->modelClass;
+        /** @var $db \yii\db\Connection */
+        $db = $modelClass::getDb();
+        $childAttribute = $db->quoteColumnName($this->childAttribute);
+        $tableName = $db->quoteTableName($this->tableName);
+
+        $sql = 'SELECT * FROM ' . $tableName . ' ct '
+            . ' WHERE ct.' . $childAttribute . ' = :pk';
+
+        return $db->createCommand($sql)->bindValue(':pk', $primaryKey)->execute() > 1 ? false : true;
+
     }
 
     /**
